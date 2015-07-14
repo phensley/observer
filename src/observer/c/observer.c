@@ -184,6 +184,11 @@ observer_scan_threads()
 	int count = 0;
 	int i = 0;
 	observer_thread_t *thread_info;
+	struct timespec start;
+	struct timespec end;
+	double elapsed = 0;
+
+	nanotime(&start);
 
 	attach_current_thread();
 	current_thread = get_current_thread();
@@ -203,7 +208,10 @@ observer_scan_threads()
 	}
 
 	detach_current_thread();
-	fprintf(stderr, "\n");
+	nanotime(&end);
+
+	elapsed = ((1000000000 * (end.tv_sec - start.tv_sec)) + (end.tv_nsec - start.tv_nsec)) / 1000000.0;
+	fprintf(stderr, "thread scan took %f ms\n", elapsed);
 }
 
 
