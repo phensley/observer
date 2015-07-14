@@ -1,0 +1,8 @@
+
+/build
+
+*.class
+*.dylib
+
+.gradle
+
