@@ -9,13 +9,34 @@ public class Test {
 
         private int value;
 
+        private void runFoo() {
+            runBar();
+        }
+
+        private void runBar() {
+            value++;
+            value *= 0.75;
+            runBaz();
+        }
+
+        private void runBaz() {
+            runQuux();
+        }
+
+        private void runQuux() {
+            sleep();
+        }
+
+        private void sleep() {
+            try {
+                Thread.sleep(10);
+            } catch (InterruptedException e) { }
+        }
+
+        @Override
         public void run() {
             while (!flag.get()) {
-                value++;
-                value *= 0.75;
-                try {
-                    Thread.sleep(10);
-                } catch (InterruptedException e) { }
+                runFoo();
             }
         }
 

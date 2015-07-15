@@ -215,19 +215,27 @@ display_method(jvmtiEnv *jvmti, jmethodID method)
 static void
 display_thread_stack(jvmtiEnv *jvmti, jthread thread)
 {
+	int max_frames = 20;
+	jvmtiThreadInfo info;
+	jvmtiFrameInfo frames[max_frames];
 	jvmtiError error = 0;
 	jint frame_count = 0;
-	jvmtiThreadInfo info;
-	jvmtiFrameInfo frames[5];
+	jint total_frames = 0;
 
         error = (*jvmti)->GetThreadInfo(jvmti, thread, &info);
         check_error(error, "failed to get thread info");
 
-	error = (*jvmti)->GetStackTrace(jvmti, thread, 0, 5, frames, &frame_count);
-	check_error(error, "failed to get stack trace\n");
+	error = (*jvmti)->GetFrameCount(jvmti, thread, &total_frames);
+	check_error(error, "failed to get frame count");
 
-	fprintf(stderr, " name=%s priority=%d daemon=%d\n", info.name, 
-		info.priority, info.is_daemon);
+	error = (*jvmti)->GetStackTrace(jvmti, thread, 0, max_frames, frames, &frame_count);
+	check_error(error, "failed to get stack trace");
+
+	fprintf(stderr, " name=%s priority=%d daemon=%d frames=%d f=%d\n", info.name, 
+		info.priority, info.is_daemon, total_frames, frame_count);
+
+	// TODO: capture the key stack info but deferr method/class name
+	// lookups until after exiting critical section
 
 	for (int i = 0; i < frame_count; i++) {
 		display_method(jvmti, frames[i].method);
