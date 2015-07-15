@@ -231,8 +231,8 @@ display_thread_stack(jvmtiEnv *jvmti, jthread thread)
 	error = (*jvmti)->GetStackTrace(jvmti, thread, 0, max_frames, frames, &frame_count);
 	check_error(error, "failed to get stack trace");
 
-	fprintf(stderr, " name=%s priority=%d daemon=%d frames=%d f=%d\n", info.name, 
-		info.priority, info.is_daemon, total_frames, frame_count);
+	fprintf(stderr, " name=%s priority=%d daemon=%d frames=%d\n", info.name, 
+		info.priority, info.is_daemon, total_frames);
 
 	// TODO: capture the key stack info but deferr method/class name
 	// lookups until after exiting critical section
