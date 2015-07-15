@@ -25,15 +25,6 @@
 #include <jni.h>
 
 
-/**
- 
-TODO:
- - tag threads with a pointer to the information struct
- - delta cpu time between intervals
-
- */
-
-
 // TODO: undocumented jvm api for getting stack trace asynchronously
 // - need to determine whether its safe to use this, or if we can
 // gather information from the public api, which can only capture a
