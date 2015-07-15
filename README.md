@@ -11,6 +11,9 @@ Specific goals:
    - stack depth, top N frames, cpu usage
  * minimize "observer effect" - be as efficient and transparent as possible
 
+Building
+-----
+    % gradle --info clean observerSharedLibrary
 
 Sample run
 -----

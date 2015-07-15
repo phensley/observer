@@ -138,10 +138,13 @@ critical_section_exit()
 static inline void
 attach_current_thread()
 {
+	jvmtiError error;
 	JavaVM *jvm = observer.jvm;
 	JNIEnv *jni = NULL;
 
-	(*jvm)->AttachCurrentThreadAsDaemon(jvm, (void **)&jni, &observer.vm_attach_args);
+	error = (*jvm)->AttachCurrentThreadAsDaemon(jvm, (void **)&jni, 
+		&observer.vm_attach_args);
+	check_error(error, "failed to attach observer thread to vm.");
 }
 
 /*
@@ -151,8 +154,10 @@ static inline void
 detach_current_thread()
 {
 	JavaVM *jvm = observer.jvm;
+	jvmtiError error;
 
-	(*jvm)->DetachCurrentThread(jvm);
+	error = (*jvm)->DetachCurrentThread(jvm);
+	check_error(error, "failed to detach observer thread from vm.");
 }
 
 /*
@@ -284,6 +289,7 @@ display_slowest_thread(int count, jthread *threads)
 		//   getting stack traces per thread
 		//
 		// - dump top N frames from stack traces
+		// - display compact histogram of thread cpu usage
 	}
 	if (max_cpu_thread != 0) {
 		fprintf(stderr, "thread that used most cpu (%f ms):\n", max_cpu_time);
