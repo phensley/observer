@@ -71,7 +71,7 @@ public class Test {
                 System.exit(1);
             }
         }
-        Thread.sleep(3500);
+        Thread.sleep(4500);
         flag.set(true);
     }
 
