@@ -100,13 +100,13 @@ nanotime()
 static inline void
 check_error(jvmtiError error, const char *message)
 {
-        switch (error) {
+	switch (error) {
 	case JVMTI_ERROR_NONE: 
 		return;
 	default: 
 		fprintf(stderr, "[observer] jvmti error: %d %s\n", error, message);
 		abort();
-        }
+	}
 }
 
 /*
@@ -208,14 +208,14 @@ display_method(jvmtiEnv *jvmti, jmethodID method)
 	char *method_name;
 	char *method_sig;
 
-        error = (*jvmti)->GetMethodDeclaringClass(jvmti, method, &class);
-        check_error(error, "failed to get declaring class");
+	error = (*jvmti)->GetMethodDeclaringClass(jvmti, method, &class);
+	check_error(error, "failed to get declaring class");
 
-        error = (*jvmti)->GetClassSignature(jvmti, class, &class_sig, NULL);
-        check_error(error, "failed to get class signature");
+	error = (*jvmti)->GetClassSignature(jvmti, class, &class_sig, NULL);
+	check_error(error, "failed to get class signature");
 
-        error = (*jvmti)->GetMethodName(jvmti, method, &method_name, &method_sig, NULL);
-        check_error(error, "failed to get method name.");
+	error = (*jvmti)->GetMethodName(jvmti, method, &method_name, &method_sig, NULL);
+	check_error(error, "failed to get method name.");
 
 	fprintf(stderr, "\t%s.%s%s\n", class_sig, method_name, method_sig);
 
@@ -234,8 +234,8 @@ display_thread_stack(jvmtiEnv *jvmti, jthread thread)
 	jint frame_count = 0;
 	jint total_frames = 0;
 
-        error = (*jvmti)->GetThreadInfo(jvmti, thread, &info);
-        check_error(error, "failed to get thread info");
+	error = (*jvmti)->GetThreadInfo(jvmti, thread, &info);
+	check_error(error, "failed to get thread info");
 
 	error = (*jvmti)->GetFrameCount(jvmti, thread, &total_frames);
 	check_error(error, "failed to get frame count");
