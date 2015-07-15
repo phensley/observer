@@ -471,6 +471,11 @@ Agent_OnLoad(JavaVM *jvm, char *options, void *reserved)
 JNIEXPORT void JNICALL 
 Agent_OnUnload(JavaVM *vm)
 {
+	jvmtiEnv *jvmti = observer.jvmti;
+
+	// TODO: this is in the wrong phase.. perhaps destroy in vm death?
+	(*jvmti)->DestroyRawMonitor(jvmti, observer.lock);
+
 	// TODO: clean up.
 	fprintf(stderr, "observer unloaded\n");
 }

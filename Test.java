@@ -50,7 +50,7 @@ public class Test {
                 System.exit(1);
             }
         }
-        Thread.sleep(10000);
+        Thread.sleep(5000);
         flag.set(true);
     }
 
