@@ -1,5 +1,5 @@
 
-observer - sketching of a lightweight thread observation agent.
+observer - Prototype of a lightweight Java thread observation agent.
 
 Goal is to periodically emit information from the running VM that can be used
 to help isolate a performance or stability issue.
