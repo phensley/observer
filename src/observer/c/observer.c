@@ -297,9 +297,6 @@ callback_thread_start(jvmtiEnv *jvmti, JNIEnv *jni, jthread thread)
 	char *name = NULL;
 	observer_thread_t *thread_info = NULL;
 
-	// TODO: enter critical section
-	// TODO: add thread id to set
-
 	(*jvmti)->GetPhase(jvmti, &phase);
 
 	switch (phase) {
@@ -331,9 +328,6 @@ callback_thread_end(jvmtiEnv *jvmti, JNIEnv *jni, jthread thread)
 	jvmtiPhase phase;
 	char *name = NULL;
 	jlong thread_info = 0;
-
-	// TODO: enter critical section
-	// TODO: remove thread id from set
 
 	(*jvmti)->GetPhase(jvmti, &phase);
 
@@ -369,7 +363,6 @@ callback_vm_init(jvmtiEnv *jvmti, JNIEnv *jni, jthread thread)
 	observer.vm_attach_args.version = JNI_VERSION_1_8;
 	observer.vm_attach_args.name = "observer-thread";
 
-	// thread to periodically trigger profiling
 	start_native_thread();
 
 	fprintf(stderr, "vm init\n");
