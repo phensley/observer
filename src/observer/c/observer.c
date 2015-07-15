@@ -217,6 +217,8 @@ observer_scan_threads()
 	error = (*jvmti)->GetAllThreads(jvmti, &count, &threads);
 	check_error(error, "Failed to get all threads.");
 
+	critical_section_enter();
+
 	fprintf(stderr, "\nThere are %d threads running.\n-------------------\n", count);
 	for (i = 0; i < count; i++) {
 		error = (*jvmti)->GetTag(jvmti, threads[i], (jlong *)&thread_info);
@@ -244,6 +246,8 @@ observer_scan_threads()
 		// - GetThreadListStackTraces(thread_list)
 		// - dump top N frames from stack traces
 	}
+
+	critical_section_exit();
 
 	detach_current_thread();
 	nanotime(&end);
@@ -336,9 +340,11 @@ callback_thread_end(jvmtiEnv *jvmti, JNIEnv *jni, jthread thread)
 	switch (phase) {
 	case JVMTI_PHASE_LIVE:
 	case JVMTI_PHASE_START:
+		critical_section_enter();
 		error = (*jvmti)->GetTag(jvmti, thread, &thread_info);
 		check_error(error, "Failed to get tag.");
 		free((void *)thread_info);
+		critical_section_exit();
 		break;
 	default:
 		fprintf(stderr, "thread end in wrong phase <%d>\n", phase);
@@ -413,6 +419,9 @@ Agent_OnLoad(JavaVM *jvm, char *options, void *reserved)
 	// Save references to the JVM and JVMTI environment
 	observer.jvm = jvm;
 	observer.jvmti = jvmti;
+
+	error = (*jvmti)->CreateRawMonitor(jvmti, "observer-monitor", &observer.lock);
+	check_error(error, "Unable to create raw monitor");
 
 	// Add capabilities to our JVMTI environment
 	memset(&capabilities, 0, sizeof(capabilities));
