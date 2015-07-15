@@ -16,8 +16,8 @@
 #include <dlfcn.h>
 
 #ifdef __MACH__
-#include <mach/clock.h>
 #include <mach/mach.h>
+#include <mach/mach_time.h>
 #endif
  
  
@@ -70,22 +70,29 @@ typedef struct {
 	jlong cpu_time;
 } observer_thread_t;
 
+const static uint64_t BILLION = 1000000000;
+
+#ifdef __MACH__
+static mach_timebase_info_data_t clock_timebase;
+#endif
+
 static observer_t observer;
 volatile bool liveness_flag = 0;
 
-// TODO: revisit the mac clock routines..
-void nanotime(struct timespec *ts)
+
+static inline uint64_t
+nanotime()
 {
 #ifdef __MACH__
-	clock_serv_t cclock;
-	mach_timespec_t mts;
-	host_get_clock_service(mach_host_self(), CALENDAR_CLOCK, &cclock);
-	clock_get_time(cclock, &mts);
-	mach_port_deallocate(mach_task_self(), cclock);
-	ts->tv_sec = mts.tv_sec;
-	ts->tv_nsec = mts.tv_nsec;
+	uint64_t clock;
+
+	clock = mach_absolute_time();
+	return clock * (uint64_t)clock_timebase.numer / (uint64_t)clock_timebase.denom;
 #else
-	clock_gettime(CLOCK_REALTIME, ts);
+	struct timespec ts;
+
+	clock_gettime(CLOCK_REALTIME, &ts);
+	return (ts.tv_sec * BILLION) + ts.tv_nsec;
 #endif
 }
 
@@ -307,12 +314,12 @@ observer_scan_threads()
 	jvmtiError error = 0;
 	jthread current_thread = 0;
 	jthread *threads = NULL;
-	struct timespec start;
-	struct timespec end;
+	uint64_t start;
+	uint64_t end;
 	int count = 0;
 	double elapsed = 0;
 
-	nanotime(&start);
+	start = nanotime();
 
 	attach_current_thread();
 	current_thread = get_current_thread();
@@ -329,11 +336,9 @@ observer_scan_threads()
 
 	(*jvmti)->Deallocate(jvmti, (void *)threads);
 
-	nanotime(&end);
+	end = nanotime();
 
-	elapsed = ((1000000000 * 
-		(end.tv_sec - start.tv_sec)) + 
-		(end.tv_nsec - start.tv_nsec)) / 1000000.0;
+	elapsed = (end - start) / 1000000.0;
 	fprintf(stderr, "\nthread scan took %f ms\n", elapsed);
 }
 
@@ -482,6 +487,8 @@ Agent_OnLoad(JavaVM *jvm, char *options, void *reserved)
 	jvmtiCapabilities capabilities;
 	jvmtiError error = 0;
 	jint res = 0;
+
+	mach_timebase_info(&clock_timebase);
 
 	// Obtain a reference to the JVMTI environment
 	res = (*jvm)->GetEnv(jvm, (void **)&jvmti, JVMTI_VERSION_1_2);
