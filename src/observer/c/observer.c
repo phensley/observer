@@ -283,7 +283,7 @@ display_slowest_thread(int count, jthread *threads)
 
 		// - compute thread cpu usage as a percentage of sampling
 		//   interval
-		// - sort threads by sampling interval
+		// - sort threads by cpu usage
 		//
 		// - GetThreadListStackTraces(list) more efficient than
 		//   getting stack traces per thread
