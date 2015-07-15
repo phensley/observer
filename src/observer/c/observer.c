@@ -63,16 +63,12 @@ typedef struct {
 	JavaVMAttachArgs vm_attach_args;
 } observer_t;
 
-
 typedef struct {
 	jlong cpu_time;
 } observer_thread_t;
 
-
 static observer_t observer_data;
-
 volatile bool liveness_flag = 0;
-
 
 // TODO: revisit the mac clock routines..
 void nanotime(struct timespec *ts)
@@ -90,7 +86,6 @@ void nanotime(struct timespec *ts)
 #endif
 }
 
-
 // TODO: support recoverable failures?
 static inline void
 check_error(jvmtiError error, const char *message)
@@ -104,7 +99,9 @@ check_error(jvmtiError error, const char *message)
         }
 }
 
-
+/*
+ * Get exclusive ownership of the raw monitor.
+ */
 static inline void
 critical_section_enter()
 {
@@ -115,7 +112,9 @@ critical_section_enter()
 	check_error(error, "Failed to enter monitor.");
 }
 
-
+/*
+ * Release ownership of the raw monitor.
+ */ 
 static inline void
 critical_section_exit()
 {
@@ -126,17 +125,25 @@ critical_section_exit()
 	check_error(error, "failed to exit monitor.");
 }
 
-
+/*
+ * Attach the current thread to the VM as a daemon thread.
+ *
+ * In order to make calls to a VM from a thread we must first
+ * attach it to the VM.  The VM can exit once all non-daemon
+ * threads have exited.
+ */
 static inline void
 attach_current_thread()
 {
 	JavaVM *jvm = observer_data.jvm;
 	JNIEnv *jni = NULL;
 
-	(*jvm)->AttachCurrentThread(jvm, (void **)&jni, &observer_data.vm_attach_args);
+	(*jvm)->AttachCurrentThreadAsDaemon(jvm, (void **)&jni, &observer_data.vm_attach_args);
 }
 
-
+/*
+ * Detach the current thread from the VM.
+ */
 static inline void
 detach_current_thread()
 {
@@ -145,7 +152,9 @@ detach_current_thread()
 	(*jvm)->DetachCurrentThread(jvm);
 }
 
-
+/*
+ * Obtain a VM reference to the current thread.
+ */
 static inline jthread
 get_current_thread()
 {
@@ -158,7 +167,11 @@ get_current_thread()
 	return thread;
 }
 
-
+/*
+ * Return the name of a thread.
+ *
+ * Note: the caller must Deallocate() the returned string.
+ */
 static char *
 get_thread_name(jvmtiEnv *jvmti, jthread thread)
 {
@@ -171,7 +184,9 @@ get_thread_name(jvmtiEnv *jvmti, jthread thread)
 	return info.name;
 }
 
-
+/*
+ * Iterates over all threads in the VM, performing operations.
+ */
 static void
 observer_scan_threads()
 {
@@ -214,7 +229,9 @@ observer_scan_threads()
 	fprintf(stderr, "thread scan took %f ms\n", elapsed);
 }
 
-
+/*
+ * The observer thread loop.
+ */
 static void
 observer_thread_start(void* arg)
 {
@@ -244,7 +261,9 @@ observer_thread_start(void* arg)
 	}
 }
 
-
+/*
+ * Creates the observer thread.
+ */
 static void 
 start_native_thread()
 {
@@ -259,7 +278,9 @@ start_native_thread()
 	}
 }
 
-
+/*
+ * Called when the VM thread starts.
+ */
 static void JNICALL
 callback_thread_start(jvmtiEnv *jvmti, JNIEnv *jni, jthread thread)
 {
@@ -295,7 +316,9 @@ callback_thread_start(jvmtiEnv *jvmti, JNIEnv *jni, jthread thread)
 	}
 }
 
-
+/*
+ * Called when a VM thread ends.
+ */
 static void JNICALL
 callback_thread_end(jvmtiEnv *jvmti, JNIEnv *jni, jthread thread)
 {
@@ -330,7 +353,9 @@ callback_thread_end(jvmtiEnv *jvmti, JNIEnv *jni, jthread thread)
 	}
 }
 
-
+/*
+ * Called on VM init.
+ */
 static void JNICALL
 callback_vm_init(jvmtiEnv *jvmti, JNIEnv *jni, jthread thread)
 {
@@ -347,7 +372,9 @@ callback_vm_init(jvmtiEnv *jvmti, JNIEnv *jni, jthread thread)
 	fprintf(stderr, "vm init\n");
 }
 
-
+/*
+ * Called on VM death.
+ */
 static void JNICALL
 callback_vm_death(jvmtiEnv *jvmti, JNIEnv *jni)
 {
@@ -355,7 +382,9 @@ callback_vm_death(jvmtiEnv *jvmti, JNIEnv *jni)
 	fprintf(stderr, "vm death\n");
 }
 
-
+/*
+ * Called on VM start.
+ */
 static void JNICALL
 callback_vm_start(jvmtiEnv* jvmti, JNIEnv* env)
 {
@@ -365,7 +394,9 @@ callback_vm_start(jvmtiEnv* jvmti, JNIEnv* env)
 
 }
 
-
+/*
+ * Main entry point for VM to load our agent.
+ */
 JNIEXPORT jint JNICALL
 Agent_OnLoad(JavaVM *jvm, char *options, void *reserved)
 {
@@ -424,11 +455,13 @@ Agent_OnLoad(JavaVM *jvm, char *options, void *reserved)
 	return JNI_OK;
 }
 
-
+/*
+ * Called on VM unloading our agent.
+ */
 JNIEXPORT void JNICALL 
 Agent_OnUnload(JavaVM *vm)
 {
-	// TODO: destroy
+	// TODO: clean up.
 	fprintf(stderr, "observer unloaded\n");
 }
 
