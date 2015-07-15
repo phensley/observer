@@ -40,7 +40,7 @@ public class Test {
         Thread[] threads = new Thread[limit];
         for (int i = 0; i < limit; i++) {
             try {
-                Runnable runnable = (i % 10 == 0) ? new Busy() : new Idle();
+                Runnable runnable = (i % 100 == 0) ? new Busy() : new Idle();
                 threads[i] = new Thread(runnable, "client-" + (i + 1));
                 threads[i].start();
 
@@ -50,7 +50,7 @@ public class Test {
                 System.exit(1);
             }
         }
-        Thread.sleep(5000);
+        Thread.sleep(3500);
         flag.set(true);
     }
 
