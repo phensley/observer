@@ -6,6 +6,8 @@
 
 // [follows the linux kernel coding style]
 
+#define _XOPEN_SOURCE
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
@@ -14,45 +16,40 @@
 #include <unistd.h>
 #include <pthread.h>
 #include <dlfcn.h>
+#include <ucontext.h>
 
 #ifdef __MACH__
 #include <mach/mach.h>
 #include <mach/mach_time.h>
 #endif
  
- 
 #include <jvmti.h>
 #include <jni.h>
 
 
-// TODO: undocumented jvm api for getting stack trace asynchronously
-// - need to determine whether its safe to use this, or if we can
-// gather information from the public api, which can only capture a
-// stack trace during a safe point.
+// Undocumented API for asynchronous stack traces.
 
-/* 
 typedef struct {
- jint lineno;
- jmethodID method_id;
+	jint lineno;
+	jmethodID method_id;
 } JVMPI_CallFrame;
 
 typedef struct {
- JNIEnv *env_id;
- jint num_frames;
- JVMPI_CallFrame *frames;
+	JNIEnv *env_id;
+	jint num_frames;
+	JVMPI_CallFrame *frames;
 } JVMPI_CallTrace;
 
-typedef void (*ASGCTType)(JVMPI_CallTrace *, jint, void *);
+// Instead of defining the symbol as an extern, we're going
+// to resolve it using dlsym()
+typedef void (*ASGCT_t)(JVMPI_CallTrace *, jint, void *);
 
-extern void 
-AsyncGetCallTrace(JVMPI_CallTrace *trace, jint depth, void* ucontext) 
-__attribute__ ((weak));
-
-*/
+static ASGCT_t async_get_call_trace;
 
 typedef struct {
 	JavaVM *jvm;
 	jvmtiEnv *jvmti;
+	JNIEnv *jni;
 	jrawMonitorID lock;
 	JavaVMAttachArgs vm_attach_args;
 } observer_t;
@@ -247,6 +244,42 @@ display_thread_stack(jvmtiEnv *jvmti, jthread thread)
 	(*jvmti)->Deallocate(jvmti, (void *)info.name);
 }
 
+
+// TBD:
+// - this needs to be invoked by a thread that received the SIGPROF
+//   signal, since AsyncGetCallTrace can only be invoked by the current
+//   thread.   thread A cannot asynchronously get the stack of thread B
+//   via this function.
+//
+static void
+execute_async_get_call_trace()
+{
+	jvmtiEnv *jvmti = observer.jvmti;
+	jvmtiError error = 0;
+	int num_frames = 10;
+	JVMPI_CallTrace trace;
+	JVMPI_CallFrame frames[num_frames];
+	ucontext_t ucontext;
+	char *method_name = NULL;
+	char *method_sig = NULL;
+
+	memset(frames, num_frames, sizeof(JVMPI_CallTrace));
+	memset(&trace, 0, sizeof(JVMPI_CallTrace));
+	trace.env_id = observer.jni;
+	trace.num_frames = num_frames;
+	trace.frames = frames;
+
+	// REMOVE: this would be available as a void * via the signal handler
+	getcontext(&ucontext);
+
+	async_get_call_trace(&trace, num_frames, &ucontext);
+
+	for (int i = 0; i < num_frames; i++) {
+		fprintf(stderr, "frame line-no=%d  method-id=%d\n", 
+			trace.frames[i].lineno, trace.frames[i].method_id);
+	}
+}
+
 static void
 display_slowest_thread(int count, jthread *threads)
 {
@@ -435,6 +468,7 @@ static void JNICALL
 callback_vm_init(jvmtiEnv *jvmti, JNIEnv *jni, jthread thread)
 {
 	liveness_flag = 1;
+	observer.jni = jni;
 
 	memset(&observer.vm_attach_args, 0, sizeof(JavaVMAttachArgs));
 	observer.vm_attach_args.version = JNI_VERSION_1_8;
@@ -464,7 +498,6 @@ callback_vm_start(jvmtiEnv* jvmti, JNIEnv* env)
 	jvmtiJlocationFormat format;
 	(*jvmti)->GetJLocationFormat(jvmti, &format);
 	fprintf(stderr, "vm start lcation format: %d\n", format);
-
 }
 
 /*
@@ -480,6 +513,12 @@ Agent_OnLoad(JavaVM *jvm, char *options, void *reserved)
 	jint res = 0;
 
 	mach_timebase_info(&clock_timebase);
+
+	// Resolve the asynchronous stack trace function dynamically.
+	async_get_call_trace = (ASGCT_t) dlsym(RTLD_DEFAULT, "AsyncGetCallTrace");
+	if (async_get_call_trace) {
+		fprintf(stderr, "resolved AsyncGetCallTrace\n");
+	}
 
 	// Obtain a reference to the JVMTI environment
 	res = (*jvm)->GetEnv(jvm, (void **)&jvmti, JVMTI_VERSION_1_2);
