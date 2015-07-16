@@ -15,8 +15,10 @@
 #include <stdbool.h>
 #include <unistd.h>
 #include <pthread.h>
+#include <signal.h>
 #include <dlfcn.h>
 #include <ucontext.h>
+#include <sys/time.h>
 
 #ifdef __MACH__
 #include <mach/mach.h>
@@ -29,14 +31,29 @@
 
 // Undocumented API for asynchronous stack traces.
 
+// Enums to interpret ASCGT call failures
+enum {
+	asgct_no_frame              = 0,
+	asgct_no_class_load         = -1,
+	asgct_gc_active             = -2,
+	asgct_unknown_not_java      = -3,
+	asgct_not_walkable_not_java = -4,
+	asgct_unknown_java          = -5,
+	asgct_not_walkable_java     = -6,
+	asgct_unknown_state         = -7,
+	asgct_thread_exit           = -8,
+	asgct_deoptimization        = -9,
+	asgct_safepoint             = -10
+};
+
 typedef struct {
-	jint lineno;
+	jint lineno;		// bytecode index
 	jmethodID method_id;
 } JVMPI_CallFrame;
 
 typedef struct {
 	JNIEnv *env_id;
-	jint num_frames;
+	jint num_frames;	// .. or enum value on failure
 	JVMPI_CallFrame *frames;
 } JVMPI_CallTrace;
 
@@ -56,6 +73,7 @@ typedef struct {
 
 typedef struct {
 	jlong cpu_time;
+	pthread_t real_thread;
 } observer_thread_t;
 
 const static uint64_t BILLION = 1000000000;
@@ -245,38 +263,41 @@ display_thread_stack(jvmtiEnv *jvmti, jthread thread)
 }
 
 
-// TBD:
+// NOTES:
 // - this needs to be invoked by a thread that received the SIGPROF
 //   signal, since AsyncGetCallTrace can only be invoked by the current
 //   thread.   thread A cannot asynchronously get the stack of thread B
 //   via this function.
 //
 static void
-execute_async_get_call_trace()
+execute_async_get_call_trace(ucontext_t *ucontext)
 {
-	jvmtiEnv *jvmti = observer.jvmti;
-	jvmtiError error = 0;
 	int num_frames = 10;
-	JVMPI_CallTrace trace;
 	JVMPI_CallFrame frames[num_frames];
-	ucontext_t ucontext;
-	char *method_name = NULL;
-	char *method_sig = NULL;
+	JVMPI_CallTrace trace;
 
+	// FIXME: memset not async safe...
 	memset(frames, num_frames, sizeof(JVMPI_CallTrace));
 	memset(&trace, 0, sizeof(JVMPI_CallTrace));
-	trace.env_id = observer.jni;
-	trace.num_frames = num_frames;
-	trace.frames = frames;
 
-	// REMOVE: this would be available as a void * via the signal handler
-	getcontext(&ucontext);
+	trace.env_id = observer.jni;
+	trace.frames = frames;
 
 	async_get_call_trace(&trace, num_frames, &ucontext);
 
-	for (int i = 0; i < num_frames; i++) {
-		fprintf(stderr, "frame line-no=%d  method-id=%d\n", 
-			trace.frames[i].lineno, trace.frames[i].method_id);
+	if (trace.num_frames <= 0) {
+		fprintf(stderr, "async_get_call_trace() error=%d\n", trace.num_frames);
+	} else {
+		fprintf(stderr, "async_get_call_trace()\n");
+		for (int i = 0; i < trace.num_frames; i++) {
+			if (trace.frames[i].lineno == -3) {
+				fprintf(stderr, "  <native method>\n");
+			} else {
+				fprintf(stderr, "  frame line-no=%d  method-id=%p\n", 
+					trace.frames[i].lineno,  // bytecode index
+					trace.frames[i].method_id);
+			}
+		}
 	}
 }
 
@@ -291,6 +312,8 @@ display_slowest_thread(int count, jthread *threads)
 	double elapsed = 0;
 	double max_cpu_time = 0;
 	jthread max_cpu_thread = 0;
+	pthread_t max_cpu_real_thread;
+	int res = 0;
 	int i = 0;
 
 	for (i = 0; i < count; i++) {
@@ -309,6 +332,7 @@ display_slowest_thread(int count, jthread *threads)
 		if (elapsed > max_cpu_time) {
 			max_cpu_time = elapsed;
 			max_cpu_thread = threads[i];
+			max_cpu_real_thread = thread_info->real_thread;
 		}
 		thread_info->cpu_time = thread_cpu_time;
 
@@ -325,7 +349,25 @@ display_slowest_thread(int count, jthread *threads)
 	if (max_cpu_thread != 0) {
 		fprintf(stderr, "thread that used most cpu (%f ms):\n", max_cpu_time);
 		display_thread_stack(jvmti, max_cpu_thread);
+
+		// send signal to max cpu thread.
+		/*
+		fprintf(stderr, "sending SIGPROF to %p\n", max_cpu_real_thread);
+		res = pthread_kill(max_cpu_real_thread, SIGPROF);
+		if (res != 0) {
+			fprintf(stderr, "error sending signal to thread %d\n", res);
+		}
+		*/
 	}
+}
+
+static void
+observer_signal_func(int signum, siginfo_t *info, void *ucontext)
+{
+	pthread_t thread = pthread_self();
+
+	fprintf(stderr, "SIGNAL: caught %d on thread %p\n", signum, thread);
+	execute_async_get_call_trace(ucontext);
 }
 
 /*
@@ -396,8 +438,37 @@ start_native_thread()
 	}
 }
 
+static void JNICALL
+callback_on_class_load(jvmtiEnv *jvmti, JNIEnv *jni, jthread thread, jclass class)
+{
+
+}
+
+static void JNICALL
+callback_on_class_prepare(jvmtiEnv *jvmti, JNIEnv *jni, jthread thread, jclass class)
+{
+	jvmtiError error = 0;
+	jint count = 0;
+	jmethodID *methods = NULL;
+	char *method_name = NULL;
+	char *method_sig = NULL;
+
+	error = (*jvmti)->GetClassMethods(jvmti, class, &count, &methods);
+	/* DEBUG
+	for (int i = 0; i < count; i++) {
+		error = (*jvmti)->GetMethodName(jvmti, methods[i], &method_name, &method_sig, NULL);
+		check_error(error, "failed to get method name.");
+		fprintf(stderr, "method  %p  == %s %s\n", methods[i], method_name, method_sig);
+	}
+	*/
+	// TODO:
+}
+
 /*
  * Called when the VM thread starts.
+ *
+ * This will be called on the newly-created thread, before the thread's
+ * method begins executing.
  */
 static void JNICALL
 callback_thread_start(jvmtiEnv *jvmti, JNIEnv *jni, jthread thread)
@@ -414,6 +485,8 @@ callback_thread_start(jvmtiEnv *jvmti, JNIEnv *jni, jthread thread)
 	case JVMTI_PHASE_START:
 		thread_info = (observer_thread_t *)malloc(sizeof(observer_thread_t));
 		memset(thread_info, 0, sizeof(observer_thread_t));
+		thread_info->real_thread = pthread_self();
+		fprintf(stderr, "setting tag for real thread %p\n", thread_info->real_thread);
 		error = (*jvmti)->SetTag(jvmti, thread, (jlong)(intptr_t)thread_info);
 		check_error(error, "Failed to set tag.");
 		break;
@@ -500,6 +573,32 @@ callback_vm_start(jvmtiEnv* jvmti, JNIEnv* env)
 	fprintf(stderr, "vm start lcation format: %d\n", format);
 }
 
+static void
+init_signals()
+{
+        struct sigaction new_action;
+        struct sigaction old_action;
+        struct itimerval new_timer;
+        struct itimerval old_timer;
+
+        new_action.sa_flags = SA_RESTART | SA_SIGINFO;
+        new_action.sa_sigaction = observer_signal_func;
+        sigemptyset(&new_action.sa_mask);
+
+        if (sigaction(SIGPROF, &new_action, &old_action) < 0) {
+		fprintf(stderr, "FAILED sigaction\n");
+	}
+
+        new_timer.it_value.tv_sec = 0;
+        new_timer.it_value.tv_usec = 25000;
+        new_timer.it_interval.tv_sec = 0;
+        new_timer.it_interval.tv_usec = 25000;
+
+	if (setitimer(ITIMER_PROF, &new_timer, &old_timer) < 0) {
+		fprintf(stderr, "FAILED setitimer\n");	
+	}
+}
+
 /*
  * Main entry point for VM to load our agent.
  */
@@ -513,6 +612,8 @@ Agent_OnLoad(JavaVM *jvm, char *options, void *reserved)
 	jint res = 0;
 
 	mach_timebase_info(&clock_timebase);
+
+	init_signals();
 
 	// Resolve the asynchronous stack trace function dynamically.
 	async_get_call_trace = (ASGCT_t) dlsym(RTLD_DEFAULT, "AsyncGetCallTrace");
@@ -539,6 +640,11 @@ Agent_OnLoad(JavaVM *jvm, char *options, void *reserved)
 	capabilities.can_tag_objects = 1;
 	capabilities.can_get_thread_cpu_time = 1;
 	capabilities.can_get_current_thread_cpu_time = 1;
+	capabilities.can_get_constant_pool = 1;
+	capabilities.can_generate_all_class_hook_events = 1;
+	capabilities.can_get_line_numbers = 1;
+	capabilities.can_get_bytecodes = 1;
+
 	error = (*jvmti)->AddCapabilities(jvmti, &capabilities);
 	check_error(error, "Unable to get required capabilities.");	
 
@@ -549,6 +655,8 @@ Agent_OnLoad(JavaVM *jvm, char *options, void *reserved)
 	callbacks.VMStart = &callback_vm_start;
 	callbacks.ThreadStart = &callback_thread_start;
 	callbacks.ThreadEnd = &callback_thread_end;
+	callbacks.ClassLoad = &callback_on_class_load;
+	callbacks.ClassPrepare = &callback_on_class_prepare;
 	error = (*jvmti)->SetEventCallbacks(jvmti, &callbacks, (jint)sizeof(callbacks));
 	check_error(error, "Unable to register callbacks.");
 
@@ -572,6 +680,14 @@ Agent_OnLoad(JavaVM *jvm, char *options, void *reserved)
 	error = (*jvmti)->SetEventNotificationMode(jvmti, JVMTI_ENABLE,
 		JVMTI_EVENT_VM_START, (jthread)NULL);
 	check_error(error, "Unable to register vm start event notifier.");
+
+	error = (*jvmti)->SetEventNotificationMode(jvmti, JVMTI_ENABLE,
+		JVMTI_EVENT_CLASS_LOAD, (jthread)NULL);
+	check_error(error, "Unable to register class load event notifier.");
+
+	error = (*jvmti)->SetEventNotificationMode(jvmti, JVMTI_ENABLE,
+		JVMTI_EVENT_CLASS_PREPARE, (jthread)NULL);
+	check_error(error, "Unable to register class prepare event notifier.");
 
 	return JNI_OK;
 }

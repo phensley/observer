@@ -1,5 +1,5 @@
 #!/bin/bash
 
 java -agentpath:./build/binaries/observerSharedLibrary/libobserver.dylib \
-    Test 1500
+    Test 15
 
