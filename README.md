@@ -1,6 +1,11 @@
 
 observer - Prototype of a lightweight Java thread observation agent.
 
+**EXPERIMENTAL** For now this is mainly for my own exploration of code related
+to continuous JVM monitoring, not to be used in any production environment.
+
+-----
+
 Goal is to periodically emit information from the running VM that can be used
 to help isolate a performance or stability issue.
 
