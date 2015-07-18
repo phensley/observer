@@ -66,8 +66,8 @@ static ASGCT_t async_get_call_trace;
 typedef struct {
 	JavaVM *jvm;
 	jvmtiEnv *jvmti;
-	JNIEnv *jni;
 	jrawMonitorID lock;
+	pthread_t agent_thread;
 	JavaVMAttachArgs vm_attach_args;
 } observer_t;
 
@@ -223,7 +223,8 @@ display_method(jvmtiEnv *jvmti, jmethodID method)
 	error = (*jvmti)->GetMethodName(jvmti, method, &method_name, &method_sig, NULL);
 	check_error(error, "failed to get method name.");
 
-	fprintf(stderr, "\t%s.%s%s\n", class_sig, method_name, method_sig);
+	fprintf(stderr, "\t%s.%s%s   id=%p\n", class_sig, method_name, method_sig,
+		method);
 
 	(*jvmti)->Deallocate(jvmti, (void *)class_sig);
 	(*jvmti)->Deallocate(jvmti, (void *)method_name);
@@ -262,25 +263,30 @@ display_thread_stack(jvmtiEnv *jvmti, jthread thread)
 	(*jvmti)->Deallocate(jvmti, (void *)info.name);
 }
 
-
-// NOTES:
-// - this needs to be invoked by a thread that received the SIGPROF
-//   signal, since AsyncGetCallTrace can only be invoked by the current
-//   thread.   thread A cannot asynchronously get the stack of thread B
-//   via this function.
-//
+/*
+ * Take a snapshot of a thread's stack asynchronously.
+ */
 static void
 execute_async_get_call_trace(ucontext_t *ucontext)
 {
-	int num_frames = 10;
+	int num_frames = 20;
 	JVMPI_CallFrame frames[num_frames];
 	JVMPI_CallTrace trace;
+	JavaVM *jvm = observer.jvm;
+	JNIEnv *jni = NULL;
 
-	// FIXME: memset not async safe...
-	memset(frames, num_frames, sizeof(JVMPI_CallTrace));
-	memset(&trace, 0, sizeof(JVMPI_CallTrace));
+	(*jvm)->GetEnv(jvm, (void **)&jni, JNI_VERSION_1_8);
+	if (jni == NULL) {
+		fprintf(stderr, "error not java occurred");
+		return;
+	}
+	trace.env_id = jni;
 
-	trace.env_id = observer.jni;
+	// memset is not async safe, zero the struct
+	for (int i = 0; i < num_frames; i++) {
+		frames[i].lineno = 0;
+		frames[i].method_id = 0;
+	}
 	trace.frames = frames;
 
 	async_get_call_trace(&trace, num_frames, &ucontext);
@@ -288,12 +294,12 @@ execute_async_get_call_trace(ucontext_t *ucontext)
 	if (trace.num_frames <= 0) {
 		fprintf(stderr, "async_get_call_trace() error=%d\n", trace.num_frames);
 	} else {
-		fprintf(stderr, "async_get_call_trace()\n");
+		fprintf(stderr, "async_get_call_trace() got %d frames\n", trace.num_frames);
 		for (int i = 0; i < trace.num_frames; i++) {
 			if (trace.frames[i].lineno == -3) {
 				fprintf(stderr, "  <native method>\n");
 			} else {
-				fprintf(stderr, "  frame line-no=%d  method-id=%p\n", 
+				fprintf(stderr, "  frame bci=%d  method-id=%p\n", 
 					trace.frames[i].lineno,  // bytecode index
 					trace.frames[i].method_id);
 			}
@@ -309,10 +315,10 @@ display_slowest_thread(int count, jthread *threads)
 	observer_thread_t *thread_info = NULL;
 	jlong current_cpu_time = 0;
 	jlong thread_cpu_time = 0;
-	double elapsed = 0;
-	double max_cpu_time = 0;
+	jlong max_cpu_time = 0;
 	jthread max_cpu_thread = 0;
 	pthread_t max_cpu_real_thread;
+	char *name = NULL;
 	int res = 0;
 	int i = 0;
 
@@ -323,41 +329,40 @@ display_slowest_thread(int count, jthread *threads)
 			continue;
 		}
 
+		// don't bother monitoring the agent thread itself.
+		if (observer.agent_thread == thread_info->real_thread) {
+			continue;
+		}
+
 		error = (*jvmti)->GetThreadCpuTime(jvmti, threads[i], &thread_cpu_time);
-		check_error(error, "Failed to get thread cpu time.");
+		if (error != JVMTI_ERROR_NONE) {
+			// thread may have exited.
+			continue;
+		}
 
 		current_cpu_time = thread_cpu_time - thread_info->cpu_time;
-		elapsed = current_cpu_time / 1000000.0;
-
-		if (elapsed > max_cpu_time) {
-			max_cpu_time = elapsed;
+		if (current_cpu_time > max_cpu_time) {
+			max_cpu_time = current_cpu_time;
 			max_cpu_thread = threads[i];
 			max_cpu_real_thread = thread_info->real_thread;
 		}
 		thread_info->cpu_time = thread_cpu_time;
-
-		// - compute thread cpu usage as a percentage of sampling
-		//   interval
-		// - sort threads by cpu usage
-		//
-		// - GetThreadListStackTraces(list) more efficient than
-		//   getting stack traces per thread
-		//
-		// - dump top N frames from stack traces
-		// - display compact histogram of thread cpu usage
 	}
 	if (max_cpu_thread != 0) {
-		fprintf(stderr, "thread that used most cpu (%f ms):\n", max_cpu_time);
-		display_thread_stack(jvmti, max_cpu_thread);
+		fprintf(stderr, "thread that used most cpu (%f ms):\n", 
+			max_cpu_time / 1000000.0);
 
-		// send signal to max cpu thread.
-		/*
-		fprintf(stderr, "sending SIGPROF to %p\n", max_cpu_real_thread);
+//		display_thread_stack(jvmti, max_cpu_thread);
+
+		// send signal to max cpu thread, to trigger async stack trace.
+		name = get_thread_name(jvmti, max_cpu_thread);
+		fprintf(stderr, "sending SIGPROF to %s pthread=%p\n",
+			name, max_cpu_real_thread);
 		res = pthread_kill(max_cpu_real_thread, SIGPROF);
 		if (res != 0) {
 			fprintf(stderr, "error sending signal to thread %d\n", res);
 		}
-		*/
+		(*jvmti)->Deallocate(jvmti, (void *)name);
 	}
 }
 
@@ -393,7 +398,12 @@ observer_scan_threads()
 	error = (*jvmti)->GetAllThreads(jvmti, &count, &threads);
 	check_error(error, "Failed to get all threads.");
 
-	fprintf(stderr, "\nThere are %d threads running.\n-------------------\n", count);
+	end = nanotime();
+	elapsed = (end - start) / 1000000.0;
+
+	start = nanotime();
+	fprintf(stderr, "\n-------------------\n");
+	fprintf(stderr, "\nSCAN: %d threads running. elapsed=%f\n", count, elapsed);
 
 	critical_section_enter();
 	display_slowest_thread(count, threads);
@@ -405,7 +415,7 @@ observer_scan_threads()
 	end = nanotime();
 
 	elapsed = (end - start) / 1000000.0;
-	fprintf(stderr, "\nthread scan took %f ms\n", elapsed);
+	fprintf(stderr, "\npolling cpu took %f ms\n", elapsed);
 }
 
 /*
@@ -436,6 +446,7 @@ start_native_thread()
 	} else {
 		fprintf(stderr, "start_native_thread()\n");
 	}
+	observer.agent_thread = thread;
 }
 
 static void JNICALL
@@ -486,7 +497,7 @@ callback_thread_start(jvmtiEnv *jvmti, JNIEnv *jni, jthread thread)
 		thread_info = (observer_thread_t *)malloc(sizeof(observer_thread_t));
 		memset(thread_info, 0, sizeof(observer_thread_t));
 		thread_info->real_thread = pthread_self();
-		fprintf(stderr, "setting tag for real thread %p\n", thread_info->real_thread);
+//		fprintf(stderr, "setting tag for real thread %p\n", thread_info->real_thread);
 		error = (*jvmti)->SetTag(jvmti, thread, (jlong)(intptr_t)thread_info);
 		check_error(error, "Failed to set tag.");
 		break;
@@ -541,7 +552,6 @@ static void JNICALL
 callback_vm_init(jvmtiEnv *jvmti, JNIEnv *jni, jthread thread)
 {
 	liveness_flag = 1;
-	observer.jni = jni;
 
 	memset(&observer.vm_attach_args, 0, sizeof(JavaVMAttachArgs));
 	observer.vm_attach_args.version = JNI_VERSION_1_8;
@@ -594,9 +604,11 @@ init_signals()
         new_timer.it_interval.tv_sec = 0;
         new_timer.it_interval.tv_usec = 25000;
 
-	if (setitimer(ITIMER_PROF, &new_timer, &old_timer) < 0) {
-		fprintf(stderr, "FAILED setitimer\n");	
-	}
+// REMOVED: for current use pthread_kill(SIGPROF) works, to 
+// directly target only thread(s) using most cpu.
+//	if (setitimer(ITIMER_PROF, &new_timer, &old_timer) < 0) {
+//		fprintf(stderr, "FAILED setitimer\n");	
+//	}
 }
 
 /*

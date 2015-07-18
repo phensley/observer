@@ -24,7 +24,15 @@ public class Test {
         }
 
         private void runQuux() {
-            sleep();
+            runUntil(10);
+        }
+
+        private void runUntil(int level) {
+            if (level == 0) {
+                sleep();
+            } else {
+                runUntil(level - 1);
+            }
         }
 
         private void sleep() {
