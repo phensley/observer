@@ -1,5 +1,9 @@
 #!/bin/bash
 
-java -agentpath:./build/binaries/observerSharedLibrary/libobserver.dylib \
-    Test 1000
+java \
+    -ms2048m \
+    -mx2048m \
+    -ss240k \
+    -agentpath:./build/binaries/observerSharedLibrary/libobserver.dylib \
+    Test 1500
 
